@@ -2,9 +2,10 @@ import { ArrowRight } from 'lucide-react'
 
 export interface HeroBannerProps {
   onCtaClick?: () => void
+  isClaimed?: boolean
 }
 
-export function HeroBanner({ onCtaClick }: HeroBannerProps): JSX.Element {
+export function HeroBanner({ onCtaClick, isClaimed = false }: HeroBannerProps): JSX.Element {
   return (
     <div className="relative flex min-h-[160px] w-full min-w-0 max-w-full shrink-0 items-center overflow-hidden rounded-2xl">
       <div
@@ -34,12 +35,13 @@ export function HeroBanner({ onCtaClick }: HeroBannerProps): JSX.Element {
         <button
           type="button"
           onClick={onCtaClick}
-          className="mt-0.5 flex w-fit shrink-0 items-center gap-1 rounded-[20px] bg-[#fbbf24] px-3.5 py-2 sm:px-4"
+          disabled={isClaimed}
+          className="mt-0.5 flex w-fit shrink-0 items-center gap-1 rounded-[20px] bg-[#fbbf24] px-3.5 py-2 sm:px-4 disabled:opacity-50"
         >
           <span className="font-[family-name:var(--font-inter)] text-xs font-bold text-[#0a0e1a]">
-            Забрать
+            {isClaimed ? 'Бонус получен' : 'Забрать'}
           </span>
-          <ArrowRight className="size-3.5 shrink-0 text-[#0a0e1a]" strokeWidth={2.5} />
+          {!isClaimed ? <ArrowRight className="size-3.5 shrink-0 text-[#0a0e1a]" strokeWidth={2.5} /> : null}
         </button>
       </div>
 

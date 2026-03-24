@@ -7,6 +7,7 @@ export type LiveLeagueDotTone = 'blue' | 'orange' | 'red'
 export type LiveLeagueMark = { type: 'dot'; tone: LiveLeagueDotTone } | { type: 'esports' }
 
 export type LiveOddVariant = 'default' | 'accent' | 'muted' | 'positive'
+export type LiveStatusTone = 'red' | 'yellow' | 'gray' | 'orange'
 
 export interface LiveOddCell {
   label: string
@@ -25,7 +26,13 @@ export interface LiveMatchCardModel {
   score: string
   /** Подпись под счётом: тайм, карта и т.д. */
   meta: string
-  odds: [LiveOddCell, LiveOddCell, LiveOddCell]
+  /** Локальное время начала матча, если есть */
+  startedAtLabel?: string
+  statusBadge: {
+    label: string
+    tone: LiveStatusTone
+  }
+  odds?: [LiveOddCell, LiveOddCell, LiveOddCell]
 }
 
 export type LiveCategoryId = 'all' | 'football' | 'esports'

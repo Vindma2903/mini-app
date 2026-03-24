@@ -1,8 +1,10 @@
 import type { BetListTab } from '../../types/bets'
 
 const TABS: { id: BetListTab; label: string }[] = [
+  { id: 'all', label: 'Все' },
   { id: 'active', label: 'Активные' },
-  { id: 'completed', label: 'Завершённые' },
+  { id: 'won', label: 'Выигрыш' },
+  { id: 'lost', label: 'Проигрыш' },
 ]
 
 export interface BetsFilterTabsProps {
@@ -13,7 +15,7 @@ export interface BetsFilterTabsProps {
 export function BetsFilterTabs({ active, onChange }: BetsFilterTabsProps): JSX.Element {
   return (
     <div
-      className="flex h-10 w-full shrink-0 gap-0 rounded-xl bg-[#141829] p-1"
+      className="grid h-10 w-full shrink-0 grid-cols-4 gap-0 rounded-xl bg-[#141829] p-1"
       role="tablist"
       aria-label="Фильтр ставок"
     >

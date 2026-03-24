@@ -19,6 +19,7 @@ export interface OddsOption {
 
 export interface MatchCardData {
   id: string
+  matchId?: number
   league: string
   leagueIcon: 'circle' | 'crosshair'
   leagueIconColor: string

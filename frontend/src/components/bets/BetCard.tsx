@@ -1,9 +1,14 @@
 import { Pencil } from 'lucide-react'
+import { useState } from 'react'
 import type { BetRecord } from '../../types/bets'
+import type { BetSelection } from '../../stores/gameWalletStore'
 import { BetLeagueMarkIcon } from './leagueMark'
 
 export interface BetCardProps {
   bet: BetRecord
+  onCashOut?: (betId: string) => void
+  onCancel?: (betId: string) => void
+  onEditSelection?: (betId: string, selection: BetSelection) => void
 }
 
 function StatusRibbon({ outcome }: { outcome: BetRecord['outcome'] }): JSX.Element | null {
@@ -22,7 +27,8 @@ function StatusRibbon({ outcome }: { outcome: BetRecord['outcome'] }): JSX.Eleme
   )
 }
 
-export function BetCard({ bet }: BetCardProps): JSX.Element {
+export function BetCard({ bet, onCashOut, onCancel, onEditSelection }: BetCardProps): JSX.Element {
+  const [editingSelection, setEditingSelection] = useState(false)
   const { leagueLine, leagueMark, isLive, matchTitle, marketLabel, selection, coefficient, stakeFormatted, currency, outcome } =
     bet
 
@@ -63,6 +69,15 @@ export function BetCard({ bet }: BetCardProps): JSX.Element {
             <p className="font-[family-name:var(--font-sora)] text-base font-bold text-[#22c55e]">{coefficient}</p>
           </div>
         </div>
+        {bet.liveStatusLabel || bet.liveScoreLabel || bet.liveTimerLabel ? (
+          <div className="flex items-center gap-2 text-[10px] font-medium text-[#8b95b0]">
+            {bet.liveStatusLabel ? (
+              <span className="rounded-md bg-[#1c2036] px-2 py-1 text-[9px] font-semibold text-[#ef4444]">{bet.liveStatusLabel}</span>
+            ) : null}
+            {bet.liveScoreLabel ? <span>Счет: {bet.liveScoreLabel}</span> : null}
+            {bet.liveTimerLabel ? <span>Минута: {bet.liveTimerLabel}</span> : null}
+          </div>
+        ) : null}
 
         {outcome === 'active' ? (
           <div className="flex h-11 w-full items-center justify-between rounded-[10px] bg-[#1c2036] px-3 ring-1 ring-inset ring-[#2a2a2a]">
@@ -97,6 +112,59 @@ export function BetCard({ bet }: BetCardProps): JSX.Element {
             Возможный выигрыш:{' '}
             <span className="font-semibold text-[#22c55e]">{bet.potentialWinFormatted}</span> {currency}
           </p>
+        ) : null}
+        {outcome === 'active' && (bet.canCashOut || bet.canCancel || bet.canEditSelection) ? (
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              disabled={!bet.canCashOut}
+              onClick={() => onCashOut?.(bet.id)}
+              className="h-9 rounded-lg bg-[#22c55e]/20 text-[11px] font-semibold text-[#22c55e] disabled:opacity-40"
+            >
+              Забрать сейчас
+            </button>
+            <button
+              type="button"
+              disabled={!bet.canEditSelection}
+              onClick={() => setEditingSelection((v) => !v)}
+              className="h-9 rounded-lg bg-[#1c2036] text-[11px] font-semibold text-white disabled:opacity-40"
+            >
+              Изменить исход
+            </button>
+            <button
+              type="button"
+              disabled={!bet.canCancel}
+              onClick={() => onCancel?.(bet.id)}
+              className="h-9 rounded-lg bg-[#ef4444]/20 text-[11px] font-semibold text-[#ef4444] disabled:opacity-40"
+            >
+              Отменить (10%)
+            </button>
+          </div>
+        ) : null}
+        {outcome === 'active' && editingSelection ? (
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => onEditSelection?.(bet.id, 'home')}
+              className="h-8 rounded-lg bg-[#1c2036] text-[11px] font-medium text-white"
+            >
+              Дом
+            </button>
+            <button
+              type="button"
+              onClick={() => onEditSelection?.(bet.id, 'draw')}
+              className="h-8 rounded-lg bg-[#1c2036] text-[11px] font-medium text-white"
+            >
+              Ничья
+            </button>
+            <button
+              type="button"
+              onClick={() => onEditSelection?.(bet.id, 'away')}
+              className="h-8 rounded-lg bg-[#1c2036] text-[11px] font-medium text-white"
+            >
+              Гости
+            </button>
+          </div>
         ) : null}
       </div>
     </article>

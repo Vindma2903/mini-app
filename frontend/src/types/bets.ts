@@ -1,4 +1,4 @@
-export type BetListTab = 'active' | 'completed'
+export type BetListTab = 'all' | 'active' | 'won' | 'lost'
 
 /** Состояние исхода ставки */
 export type BetOutcomeStatus = 'active' | 'won' | 'lost'
@@ -16,8 +16,13 @@ export interface BetRecord {
   selection: string
   coefficient: string
   stakeFormatted: string
+  stakeValue?: number
   currency: string
   outcome: BetOutcomeStatus
+  sortTimestamp?: number
+  liveStatusLabel?: string
+  liveScoreLabel?: string
+  liveTimerLabel?: string
   /** Подпись под лигой справа (опционально) */
   scheduleHint?: string
   /** Для завершённых: итог (+ выигрыш / − проигрыш) */
@@ -25,6 +30,9 @@ export interface BetRecord {
   settlementAmount?: string
   /** Для активных: возможный выигрыш одной позиции */
   potentialWinFormatted?: string
+  canCashOut?: boolean
+  canCancel?: boolean
+  canEditSelection?: boolean
 }
 
 export interface BetsTotals {

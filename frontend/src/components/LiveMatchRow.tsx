@@ -2,6 +2,7 @@ import type { LiveMatchData } from '../types/home'
 
 export interface LiveMatchRowProps {
   match: LiveMatchData
+  onClick?: () => void
 }
 
 const toneClass: Record<LiveMatchData['odds'][0]['tone'], string> = {
@@ -10,9 +11,23 @@ const toneClass: Record<LiveMatchData['odds'][0]['tone'], string> = {
   white: 'text-white',
 }
 
-export function LiveMatchRow({ match }: LiveMatchRowProps): JSX.Element {
+export function LiveMatchRow({ match, onClick }: LiveMatchRowProps): JSX.Element {
   return (
-    <div className="flex w-full min-w-0 items-center gap-2 rounded-[14px] bg-[#141829] px-3 py-2.5 sm:gap-2.5 sm:px-3.5 sm:py-3">
+    <div
+      onClick={onClick}
+      onKeyDown={(event) => {
+        if (!onClick) return
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onClick()
+        }
+      }}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      className={`flex w-full min-w-0 items-center gap-2 rounded-[14px] bg-[#141829] px-3 py-2.5 sm:gap-2.5 sm:px-3.5 sm:py-3 ${
+        onClick ? 'cursor-pointer transition-colors hover:bg-[#1a1f33]' : ''
+      }`}
+    >
       {/* Статус LIVE — компактнее на узкой ширине */}
       <div className="flex w-10 shrink-0 flex-col items-center gap-0.5 sm:w-[50px]">
         <div className="rounded bg-[#ef4444] px-1 py-0.5 sm:px-1.5 sm:py-0.5">

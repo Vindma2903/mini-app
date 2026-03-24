@@ -3,9 +3,10 @@ import { CircleDollarSign, Plus, Zap } from 'lucide-react'
 export interface AppHeaderProps {
   balance: string
   currencySuffix?: string
+  onDepositClick?: () => void
 }
 
-export function AppHeader({ balance, currencySuffix = '₽' }: AppHeaderProps): JSX.Element {
+export function AppHeader({ balance, currencySuffix = '₽', onDepositClick }: AppHeaderProps): JSX.Element {
   return (
     <div className="flex h-14 w-full shrink-0 items-center justify-between px-4 py-2">
       <div className="flex items-center gap-2">
@@ -30,6 +31,7 @@ export function AppHeader({ balance, currencySuffix = '₽' }: AppHeaderProps): 
         </div>
         <button
           type="button"
+          onClick={onDepositClick}
           className="flex items-center gap-1 rounded-[20px] bg-[#fbbf24] px-3.5 py-2"
         >
           <Plus className="size-3 text-[#0a0e1a]" strokeWidth={3} />

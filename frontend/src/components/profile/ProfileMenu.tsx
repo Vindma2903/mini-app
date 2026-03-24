@@ -1,15 +1,21 @@
 import { ChevronRight } from 'lucide-react'
-import { useCallback, useId, useState } from 'react'
+import { useCallback, useId } from 'react'
 import type { ProfileMenuItemModel } from '../../types/profile'
 import { ProfileMenuToggle } from './ProfileMenuToggle'
 
 export interface ProfileMenuProps {
   items: ProfileMenuItemModel[]
+  notificationsOn: boolean
+  onNotificationsChange: (next: boolean) => void
   onItemClick?: (id: string) => void
 }
 
-export function ProfileMenu({ items, onItemClick }: ProfileMenuProps): JSX.Element {
-  const [notificationsOn, setNotificationsOn] = useState(true)
+export function ProfileMenu({
+  items,
+  notificationsOn,
+  onNotificationsChange,
+  onItemClick,
+}: ProfileMenuProps): JSX.Element {
   const notificationsLabelId = useId()
 
   const onNav = useCallback(
@@ -35,7 +41,7 @@ export function ProfileMenu({ items, onItemClick }: ProfileMenuProps): JSX.Eleme
                   </span>
                   <ProfileMenuToggle
                     pressed={notificationsOn}
-                    onChange={setNotificationsOn}
+                    onChange={onNotificationsChange}
                     labelledBy={notificationsLabelId}
                   />
                 </div>

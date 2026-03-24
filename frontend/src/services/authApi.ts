@@ -2,6 +2,22 @@ import type { AuthCredentials, AuthUser, LoginResponse } from '../types/auth'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
 
+function formatFastApiDetail(detail: unknown): string | null {
+  if (typeof detail === 'string') {
+    return detail
+  }
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (item && typeof item === 'object' && 'msg' in item) {
+        return String((item as { msg: unknown }).msg)
+      }
+      return typeof item === 'string' ? item : JSON.stringify(item)
+    })
+    return parts.join('; ')
+  }
+  return null
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
@@ -14,9 +30,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let message = 'Request failed'
     try {
-      const data = (await response.json()) as { detail?: string }
-      if (data.detail) {
-        message = data.detail
+      const data = (await response.json()) as { detail?: unknown }
+      const parsed = data.detail != null ? formatFastApiDetail(data.detail) : null
+      if (parsed) {
+        message = parsed
       }
     } catch {
       // Ignore JSON parse errors for non-JSON responses.

@@ -20,11 +20,17 @@ export function ProfileBetHistory({ items, onSeeAll }: ProfileBetHistoryProps): 
         </button>
       </div>
       <ul className="flex list-none flex-col gap-2.5 p-0">
-        {items.map((item) => (
-          <li key={item.id}>
-            <ProfileBetHistoryItem item={item} />
+        {items.length === 0 ? (
+          <li className="rounded-xl bg-[#141829] px-3.5 py-4 text-center font-[family-name:var(--font-inter)] text-xs text-[#8b95b0]">
+            Пока нет операций
           </li>
-        ))}
+        ) : (
+          items.map((item) => (
+            <li key={item.id}>
+              <ProfileBetHistoryItem item={item} />
+            </li>
+          ))
+        )}
       </ul>
     </section>
   )

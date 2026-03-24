@@ -17,7 +17,7 @@ export interface ProfileStat {
   valueClassName: string
 }
 
-export type ProfileBetHistoryResult = 'win' | 'loss'
+export type ProfileBetHistoryResult = 'win' | 'loss' | 'neutral'
 
 export interface ProfileBetHistoryItemModel {
   id: string

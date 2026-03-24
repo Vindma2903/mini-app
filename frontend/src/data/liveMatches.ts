@@ -17,6 +17,7 @@ export const LIVE_MATCHES_MOCK: LiveMatchCardModel[] = [
     teamRight: { name: 'Chelsea' },
     score: '2 : 1',
     meta: '2-й тайм',
+    statusBadge: { label: 'LIVE', tone: 'red' },
     odds: [
       { label: 'П1', value: '1.65', variant: 'positive' },
       { label: 'Ничья', value: '4.20', variant: 'accent' },
@@ -32,6 +33,7 @@ export const LIVE_MATCHES_MOCK: LiveMatchCardModel[] = [
     teamRight: { name: 'G2' },
     score: '11 : 7',
     meta: 'Карта 2 / Mirage',
+    statusBadge: { label: 'LIVE', tone: 'red' },
     odds: [
       { label: 'П1', value: '1.35', variant: 'positive' },
       { label: 'Ничья', value: '—', variant: 'muted' },
@@ -47,6 +49,7 @@ export const LIVE_MATCHES_MOCK: LiveMatchCardModel[] = [
     teamRight: { name: 'Atletico' },
     score: '0 : 0',
     meta: '1-й тайм',
+    statusBadge: { label: 'LIVE', tone: 'red' },
     odds: [
       { label: 'П1', value: '2.10' },
       { label: 'Ничья', value: '3.25' },
