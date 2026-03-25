@@ -31,6 +31,8 @@ export function BetCard({ bet, onCashOut, onCancel, onEditSelection }: BetCardPr
   const [editingSelection, setEditingSelection] = useState(false)
   const { leagueLine, leagueMark, isLive, matchTitle, marketLabel, selection, coefficient, stakeFormatted, currency, outcome } =
     bet
+  const actionsCount = Number(Boolean(bet.canCashOut)) + Number(Boolean(bet.canEditSelection)) + Number(Boolean(bet.canCancel))
+  const actionsGridClass = actionsCount <= 1 ? 'grid-cols-1' : actionsCount === 2 ? 'grid-cols-2' : 'grid-cols-3'
 
   return (
     <article className="overflow-hidden rounded-[14px] bg-[#141829]">
@@ -114,31 +116,34 @@ export function BetCard({ bet, onCashOut, onCancel, onEditSelection }: BetCardPr
           </p>
         ) : null}
         {outcome === 'active' && (bet.canCashOut || bet.canCancel || bet.canEditSelection) ? (
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              disabled={!bet.canCashOut}
-              onClick={() => onCashOut?.(bet.id)}
-              className="h-9 rounded-lg bg-[#22c55e]/20 text-[11px] font-semibold text-[#22c55e] disabled:opacity-40"
-            >
-              Забрать сейчас
-            </button>
-            <button
-              type="button"
-              disabled={!bet.canEditSelection}
-              onClick={() => setEditingSelection((v) => !v)}
-              className="h-9 rounded-lg bg-[#1c2036] text-[11px] font-semibold text-white disabled:opacity-40"
-            >
-              Изменить исход
-            </button>
-            <button
-              type="button"
-              disabled={!bet.canCancel}
-              onClick={() => onCancel?.(bet.id)}
-              className="h-9 rounded-lg bg-[#ef4444]/20 text-[11px] font-semibold text-[#ef4444] disabled:opacity-40"
-            >
-              Отменить (10%)
-            </button>
+          <div className={`grid ${actionsGridClass} gap-2`}>
+            {bet.canCashOut ? (
+              <button
+                type="button"
+                onClick={() => onCashOut?.(bet.id)}
+                className="h-9 rounded-lg bg-[#22c55e]/20 text-[11px] font-semibold text-[#22c55e]"
+              >
+                Забрать сейчас
+              </button>
+            ) : null}
+            {bet.canEditSelection ? (
+              <button
+                type="button"
+                onClick={() => setEditingSelection((v) => !v)}
+                className="h-9 rounded-lg bg-[#1c2036] text-[11px] font-semibold text-white"
+              >
+                Изменить исход
+              </button>
+            ) : null}
+            {bet.canCancel ? (
+              <button
+                type="button"
+                onClick={() => onCancel?.(bet.id)}
+                className="h-9 rounded-lg bg-[#ef4444]/20 text-[11px] font-semibold text-[#ef4444]"
+              >
+                {bet.cancelButtonLabel ?? 'Отменить (10%)'}
+              </button>
+            ) : null}
           </div>
         ) : null}
         {outcome === 'active' && editingSelection ? (

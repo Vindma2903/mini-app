@@ -25,17 +25,26 @@ from app.schemas_game import (
     MatchmakingPreviewResponse,
     PredictionCreateRequest,
     PredictionPublic,
+    RequestQueueSnapshotResponse,
     ResolveSessionRequest,
     SessionCreateRequest,
     SessionPublic,
     SessionStatusPatchRequest,
 )
 from app.services.api_football_client import ApiFootballClient
+from app.services.pandascore_client import PandaScoreClient
+from app.services.request_queue_monitor import get_request_queue_monitor
 
 router = APIRouter(tags=["game"])
 _live_matches_cache: list[LiveMatchPublic] | None = None
 _live_matches_cache_expires_at = 0.0
+_popular_matches_cache: list[LiveMatchPublic] | None = None
+_popular_matches_cache_expires_at = 0.0
+_esports_matches_cache: list[LiveMatchPublic] | None = None
+_esports_matches_cache_expires_at = 0.0
 _live_matches_request_history: dict[int, deque[float]] = defaultdict(deque)
+_popular_matches_request_history: dict[int, deque[float]] = defaultdict(deque)
+_esports_matches_request_history: dict[int, deque[float]] = defaultdict(deque)
 _SUPPORTED_SPORTS = {"football", "cs2"}
 _SUPPORTED_EVENT_TYPE = "goal"
 _SCORE_K_MS = 30
@@ -76,14 +85,16 @@ async def get_live_matches(current_user: User = Depends(get_current_user)) -> li
         )
 
     now = time.monotonic()
-    _enforce_live_rate_limit(
+    if _live_matches_cache is not None and now < _live_matches_cache_expires_at:
+        return _live_matches_cache
+
+    _enforce_rate_limit(
+        history_map=_live_matches_request_history,
         user_id=current_user.id,
         now=now,
         limit_per_minute=max(1, settings.live_matches_rate_limit_per_minute),
+        error_detail="Too many live matches requests, please retry later",
     )
-
-    if _live_matches_cache is not None and now < _live_matches_cache_expires_at:
-        return _live_matches_cache
 
     client = ApiFootballClient(
         api_key=settings.api_football_api_key,
@@ -119,8 +130,126 @@ async def get_live_matches(current_user: User = Depends(get_current_user)) -> li
     return payload
 
 
-def _enforce_live_rate_limit(user_id: int, now: float, limit_per_minute: int) -> None:
-    history = _live_matches_request_history[user_id]
+@router.get("/matches/popular", response_model=list[LiveMatchPublic])
+async def get_popular_matches(current_user: User = Depends(get_current_user)) -> list[LiveMatchPublic]:
+    global _popular_matches_cache, _popular_matches_cache_expires_at
+    settings = get_settings()
+    if not settings.api_football_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API_FOOTBALL_API_KEY is not configured",
+        )
+
+    now = time.monotonic()
+    if _popular_matches_cache is not None and now < _popular_matches_cache_expires_at:
+        return _popular_matches_cache
+
+    _enforce_rate_limit(
+        history_map=_popular_matches_request_history,
+        user_id=current_user.id,
+        now=now,
+        limit_per_minute=max(1, settings.live_matches_rate_limit_per_minute),
+        error_detail="Too many popular matches requests, please retry later",
+    )
+
+    client = ApiFootballClient(
+        api_key=settings.api_football_api_key,
+        base_url=settings.api_football_base_url,
+        timeout_seconds=settings.api_football_timeout_seconds,
+    )
+    try:
+        items = await client.get_popular_matches()
+    except httpx.HTTPError:
+        if _popular_matches_cache is not None:
+            return _popular_matches_cache
+        if _live_matches_cache is not None:
+            return _live_matches_cache
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Popular matches provider is unavailable",
+        ) from None
+
+    payload = [
+        LiveMatchPublic(
+            provider_match_id=item.provider_match_id,
+            league=item.league,
+            home_team=item.home_team,
+            away_team=item.away_team,
+            home_score=item.home_score,
+            away_score=item.away_score,
+            elapsed_minutes=item.elapsed_minutes,
+            status_short=item.status_short,
+            started_at=item.started_at,
+        )
+        for item in items
+    ]
+    _popular_matches_cache = payload
+    _popular_matches_cache_expires_at = now + max(1, settings.live_matches_cache_ttl_seconds)
+    return payload
+
+
+@router.get("/matches/esports", response_model=list[LiveMatchPublic])
+async def get_esports_matches(current_user: User = Depends(get_current_user)) -> list[LiveMatchPublic]:
+    global _esports_matches_cache, _esports_matches_cache_expires_at
+    settings = get_settings()
+    now = time.monotonic()
+    if not settings.pandascore_api_token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="PANDASCORE_API_TOKEN is not configured",
+        )
+    if _esports_matches_cache is not None and now < _esports_matches_cache_expires_at:
+        return _esports_matches_cache
+
+    _enforce_rate_limit(
+        history_map=_esports_matches_request_history,
+        user_id=current_user.id,
+        now=now,
+        limit_per_minute=max(1, settings.esports_matches_rate_limit_per_minute),
+        error_detail="Too many esports requests, please retry later",
+    )
+
+    client = PandaScoreClient(
+        token=settings.pandascore_api_token,
+        timeout_seconds=settings.pandascore_timeout_seconds,
+    )
+    try:
+        items = await client.get_live_matches(games=("cs2",))
+    except httpx.HTTPError:
+        if _esports_matches_cache is not None:
+            return _esports_matches_cache
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Esports matches provider is unavailable",
+        ) from None
+
+    payload = [
+        LiveMatchPublic(
+            provider_match_id=item.provider_match_id,
+            league=item.league,
+            home_team=item.home_team,
+            away_team=item.away_team,
+            home_score=item.home_score,
+            away_score=item.away_score,
+            elapsed_minutes=item.elapsed_minutes,
+            status_short=item.status_short,
+            started_at=item.started_at,
+        )
+        for item in items
+    ]
+    _esports_matches_cache = payload
+    _esports_matches_cache_expires_at = now + max(1, settings.esports_matches_cache_ttl_seconds)
+    return payload
+
+
+def _enforce_rate_limit(
+    history_map: dict[int, deque[float]],
+    user_id: int,
+    now: float,
+    limit_per_minute: int,
+    error_detail: str,
+) -> None:
+    history = history_map[user_id]
     cutoff = now - 60.0
     while history and history[0] < cutoff:
         history.popleft()
@@ -128,7 +257,7 @@ def _enforce_live_rate_limit(user_id: int, now: float, limit_per_minute: int) ->
     if len(history) >= limit_per_minute:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many live matches requests, please retry later",
+            detail=error_detail,
         )
     history.append(now)
 
@@ -253,7 +382,32 @@ def get_my_prediction(
     return PredictionPublic.model_validate(prediction) if prediction else None
 
 
-@router.get("/leaderboard/{session_id}", response_model=LeaderboardResponse)
+@router.delete("/predictions/me/{session_id}")
+def cancel_my_prediction(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    session = db.get(GameSession, session_id)
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if session.status not in (SessionStatus.PREDICTING, SessionStatus.LOCKED):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Prediction can be cancelled only while window is open")
+
+    prediction = db.scalar(
+        select(Prediction).where(Prediction.session_id == session_id, Prediction.user_id == current_user.id).limit(1)
+    )
+    if prediction is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prediction not found")
+    if prediction.score is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Prediction is already resolved")
+
+    db.delete(prediction)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/leaderboard/session/{session_id}", response_model=LeaderboardResponse)
 def session_leaderboard(session_id: int, db: Session = Depends(get_db)) -> LeaderboardResponse:
     stmt = (
         select(Prediction, User)
@@ -657,3 +811,13 @@ def admin_sessions(
 ) -> list[SessionPublic]:
     sessions = db.scalars(select(GameSession).order_by(GameSession.created_at.desc())).all()
     return [SessionPublic.model_validate(item) for item in sessions]
+
+
+@router.get("/admin/request-queue", response_model=RequestQueueSnapshotResponse)
+def admin_request_queue(
+    limit: int = 200,
+    _: User = Depends(get_admin_user),
+) -> RequestQueueSnapshotResponse:
+    monitor = get_request_queue_monitor()
+    snapshot = monitor.snapshot(limit=limit)
+    return RequestQueueSnapshotResponse.model_validate(snapshot)

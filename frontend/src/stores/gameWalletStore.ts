@@ -40,8 +40,11 @@ interface GameWalletState {
   balance: number
   bets: GameBet[]
   transactions: WalletTransaction[]
+  predictionStakesBySession: Record<number, number>
   welcomeBonusClaimed: boolean
   placeBet: (input: PlaceBetInput) => ActionResult
+  setPredictionStake: (sessionId: number, stake: number) => void
+  clearPredictionStake: (sessionId: number) => void
   settleFromMatches: (matches: LiveMatch[]) => void
   cashOutBet: (betId: string) => ActionResult
   cancelBetWithFee: (betId: string) => ActionResult
@@ -90,6 +93,7 @@ export const useGameWalletStore = create<GameWalletState>()(
       balance: INITIAL_BALANCE,
       bets: [],
       transactions: [],
+      predictionStakesBySession: {},
       welcomeBonusClaimed: false,
       placeBet: ({ match, selection, stake, odds }) => {
         if (!Number.isFinite(stake) || stake <= 0) {
@@ -151,6 +155,28 @@ export const useGameWalletStore = create<GameWalletState>()(
         })
 
         return { ok: true }
+      },
+      setPredictionStake: (sessionId, stake) => {
+        const safeSessionId = Math.floor(sessionId)
+        const safeStake = Math.max(1, Math.round(stake))
+        if (!Number.isFinite(safeSessionId) || safeSessionId <= 0) return
+        if (!Number.isFinite(safeStake)) return
+        const state = get()
+        set({
+          predictionStakesBySession: {
+            ...state.predictionStakesBySession,
+            [safeSessionId]: safeStake,
+          },
+        })
+      },
+      clearPredictionStake: (sessionId) => {
+        const safeSessionId = Math.floor(sessionId)
+        if (!Number.isFinite(safeSessionId) || safeSessionId <= 0) return
+        const state = get()
+        if (!(safeSessionId in state.predictionStakesBySession)) return
+        const next = { ...state.predictionStakesBySession }
+        delete next[safeSessionId]
+        set({ predictionStakesBySession: next })
       },
       settleFromMatches: (matches) => {
         const state = get()
@@ -421,6 +447,7 @@ export const useGameWalletStore = create<GameWalletState>()(
         balance: state.balance,
         bets: state.bets,
         transactions: state.transactions,
+        predictionStakesBySession: state.predictionStakesBySession,
         welcomeBonusClaimed: state.welcomeBonusClaimed,
       }),
     },

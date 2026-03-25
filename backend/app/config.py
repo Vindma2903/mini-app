@@ -25,10 +25,18 @@ class Settings(BaseSettings):
     )
     api_football_api_key: str = Field(default="", alias="API_FOOTBALL_API_KEY")
     api_football_timeout_seconds: float = Field(default=8.0, alias="API_FOOTBALL_TIMEOUT_SECONDS")
+    pandascore_timeout_seconds: float = Field(default=8.0, alias="PANDASCORE_TIMEOUT_SECONDS")
+    sportsrc_base_url: str = Field(default="https://api.sportsrc.org/", alias="SPORTSRC_BASE_URL")
+    sportsrc_timeout_seconds: float = Field(default=8.0, alias="SPORTSRC_TIMEOUT_SECONDS")
     live_matches_cache_ttl_seconds: int = Field(default=20, alias="LIVE_MATCHES_CACHE_TTL_SECONDS")
     live_matches_rate_limit_per_minute: int = Field(
         default=10,
         alias="LIVE_MATCHES_RATE_LIMIT_PER_MINUTE",
+    )
+    esports_matches_cache_ttl_seconds: int = Field(default=45, alias="ESPORTS_MATCHES_CACHE_TTL_SECONDS")
+    esports_matches_rate_limit_per_minute: int = Field(
+        default=8,
+        alias="ESPORTS_MATCHES_RATE_LIMIT_PER_MINUTE",
     )
     auto_session_enabled: bool = Field(default=False, alias="AUTO_SESSION_ENABLED")
     auto_session_poll_seconds: int = Field(default=20, alias="AUTO_SESSION_POLL_SECONDS")

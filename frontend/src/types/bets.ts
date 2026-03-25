@@ -32,6 +32,7 @@ export interface BetRecord {
   potentialWinFormatted?: string
   canCashOut?: boolean
   canCancel?: boolean
+  cancelButtonLabel?: string
   canEditSelection?: boolean
 }
 

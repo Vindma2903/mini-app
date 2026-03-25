@@ -4,13 +4,30 @@ import { LiveCategoryTabs } from '../components/live/LiveCategoryTabs'
 import { LiveMatchCard } from '../components/live/LiveMatchCard'
 import { LiveScreenHeader } from '../components/live/LiveScreenHeader'
 import { StatusBar } from '../components/StatusBar'
+import { getDemoEsportMatches, getDemoFootballMatches } from '../data/demoLiveMatches'
 import { LIVE_CATEGORY_TABS } from '../data/liveMatches'
 import { PATHS } from '../routes/paths'
-import { getLiveMatches } from '../services/gameApi'
+import { getEsportsMatches, getLiveMatches } from '../services/gameApi'
+import { useSettingsStore } from '../stores/settingsStore'
 import type { LiveMatch } from '../types/game'
 import type { LiveCategoryId, LiveMatchCardModel, LiveStatusTone } from '../types/live'
 
-const LIVE_POLL_INTERVAL_MS = 10_000
+const FOOTBALL_POLL_INTERVAL_MS = 10_000
+const ESPORTS_POLL_INTERVAL_MS = 20_000
+const DISPLAY_TIME_ZONE = 'Europe/Moscow'
+const DISPLAY_TIME_ZONE_LABEL = 'МСК'
+
+function getDemoCountdownLabel(match: LiveMatch): string | null {
+  if (!match.league.includes('(Demo)')) return null
+  if (!match.started_at) return 'Демо-матч'
+  const startedAtMs = new Date(match.started_at).getTime()
+  if (!Number.isFinite(startedAtMs)) return 'Демо-матч'
+  if ((match.status_short ?? '').toUpperCase() === 'FT') return 'Демо-матч · завершен'
+  const leftMs = Math.max(0, 2 * 60_000 - (Date.now() - startedAtMs))
+  const mm = Math.floor(leftMs / 60_000)
+  const ss = Math.floor((leftMs % 60_000) / 1000)
+  return `Демо-матч · завершится через ${String(mm)}:${String(ss).padStart(2, '0')}`
+}
 
 function formatUpdateTime(value: Date | null): string {
   if (!value) return '—'
@@ -54,8 +71,9 @@ function getStartedAtLabel(startedAt: string | null): string | undefined {
   const localTime = new Intl.DateTimeFormat('ru-RU', {
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: DISPLAY_TIME_ZONE,
   }).format(date)
-  return `Старт ${localTime}`
+  return `Старт ${localTime} ${DISPLAY_TIME_ZONE_LABEL}`
 }
 
 function getScorePart(value: number | null): string {
@@ -75,6 +93,7 @@ function getStatusBadge(
 }
 
 function mapMatchToLiveCard(match: LiveMatch): LiveMatchCardModel {
+  const demoMeta = getDemoCountdownLabel(match)
   return {
     id: String(match.provider_match_id),
     league: match.league,
@@ -83,7 +102,23 @@ function mapMatchToLiveCard(match: LiveMatch): LiveMatchCardModel {
     teamLeft: { name: match.home_team },
     teamRight: { name: match.away_team },
     score: `${getScorePart(match.home_score)} : ${getScorePart(match.away_score)}`,
-    meta: getStatusMeta(match.status_short),
+    meta: demoMeta ?? getStatusMeta(match.status_short),
+    startedAtLabel: getStartedAtLabel(match.started_at),
+    statusBadge: getStatusBadge(match.status_short),
+  }
+}
+
+function mapEsportsToLiveCard(match: LiveMatch): LiveMatchCardModel {
+  const demoMeta = getDemoCountdownLabel(match)
+  return {
+    id: String(match.provider_match_id),
+    league: match.league,
+    leagueMark: { type: 'esports' },
+    timer: getTimer(match.status_short, match.elapsed_minutes),
+    teamLeft: { name: match.home_team },
+    teamRight: { name: match.away_team },
+    score: `${getScorePart(match.home_score)} : ${getScorePart(match.away_score)}`,
+    meta: demoMeta ?? getStatusMeta(match.status_short),
     startedAtLabel: getStartedAtLabel(match.started_at),
     statusBadge: getStatusBadge(match.status_short),
   }
@@ -91,40 +126,90 @@ function mapMatchToLiveCard(match: LiveMatch): LiveMatchCardModel {
 
 export function LivePage(): JSX.Element {
   const navigate = useNavigate()
+  const demoDataEnabled = useSettingsStore((s) => s.demoDataEnabled)
   const [category, setCategory] = useState<LiveCategoryId>('all')
   const [matches, setMatches] = useState<LiveMatch[]>([])
+  const [esportsMatches, setEsportsMatches] = useState<LiveMatch[]>([])
   const [lastLiveSuccessAt, setLastLiveSuccessAt] = useState<Date | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const loadFootball = useCallback(async () => {
     try {
       const live = await getLiveMatches()
-      setMatches(live)
       if (live.length > 0) {
+        setMatches(live)
         setLastLiveSuccessAt(new Date())
+      } else if (demoDataEnabled) {
+        setMatches(getDemoFootballMatches())
+        setLastLiveSuccessAt(new Date())
+      } else {
+        setMatches([])
       }
       setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось загрузить live-данные')
+      if (demoDataEnabled) {
+        setMatches(getDemoFootballMatches())
+        setLastLiveSuccessAt(new Date())
+        setError(null)
+      } else {
+        setError(err instanceof Error ? err.message : 'Не удалось загрузить live-данные')
+      }
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [demoDataEnabled])
+
+  const loadEsports = useCallback(async () => {
+    try {
+      const esports = await getEsportsMatches()
+      if (esports.length > 0) {
+        setEsportsMatches(esports)
+        setLastLiveSuccessAt(new Date())
+      } else if (demoDataEnabled) {
+        setEsportsMatches(getDemoEsportMatches())
+        setLastLiveSuccessAt(new Date())
+      } else {
+        setEsportsMatches([])
+      }
+      setError(null)
+    } catch (err) {
+      if (demoDataEnabled) {
+        setEsportsMatches(getDemoEsportMatches())
+        setLastLiveSuccessAt(new Date())
+        setError(null)
+      } else {
+        setError(err instanceof Error ? err.message : 'Не удалось загрузить live-данные')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [demoDataEnabled])
 
   useEffect(() => {
-    void load()
+    void loadFootball()
     const id = window.setInterval(() => {
-      void load()
-    }, LIVE_POLL_INTERVAL_MS)
+      void loadFootball()
+    }, FOOTBALL_POLL_INTERVAL_MS)
     return () => window.clearInterval(id)
-  }, [load])
+  }, [loadFootball])
+
+  useEffect(() => {
+    if (category === 'football') return
+    void loadEsports()
+    const id = window.setInterval(() => {
+      void loadEsports()
+    }, ESPORTS_POLL_INTERVAL_MS)
+    return () => window.clearInterval(id)
+  }, [category, loadEsports])
 
   const cards = useMemo(() => {
     const footballCards = matches.map(mapMatchToLiveCard)
-    if (category === 'all' || category === 'football') return footballCards
-    return []
-  }, [category, matches])
+    const esportsCards = esportsMatches.map(mapEsportsToLiveCard)
+    if (category === 'football') return footballCards
+    if (category === 'esports') return esportsCards
+    return [...footballCards, ...esportsCards]
+  }, [category, esportsMatches, matches])
 
   const liveCount = cards.length
 

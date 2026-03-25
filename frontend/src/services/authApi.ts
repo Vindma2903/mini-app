@@ -1,6 +1,8 @@
 import type { AuthCredentials, AuthUser, LoginResponse } from '../types/auth'
+import { useApiRequestQueueStore } from '../stores/apiRequestQueueStore'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
+const RETRY_DELAYS_MS = [5000, 30000, 60000] as const
 
 function formatFastApiDetail(detail: unknown): string | null {
   if (typeof detail === 'string') {
@@ -19,29 +21,58 @@ function formatFastApiDetail(detail: unknown): string | null {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  })
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const url = `${API_BASE_URL}${path}`
+  const requestId = useApiRequestQueueStore.getState().enqueue({ method, url })
+  let lastError: Error | null = null
 
-  if (!response.ok) {
-    let message = 'Request failed'
-    try {
-      const data = (await response.json()) as { detail?: unknown }
-      const parsed = data.detail != null ? formatFastApiDetail(data.detail) : null
-      if (parsed) {
-        message = parsed
-      }
-    } catch {
-      // Ignore JSON parse errors for non-JSON responses.
+  for (let attemptIndex = 0; attemptIndex <= RETRY_DELAYS_MS.length; attemptIndex += 1) {
+    if (attemptIndex > 0) {
+      useApiRequestQueueStore.getState().markAttemptStart(requestId, attemptIndex + 1)
     }
-    throw new Error(message)
-  }
 
-  return (await response.json()) as T
+    try {
+      const response = await fetch(url, {
+        ...init,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(init?.headers ?? {}),
+        },
+      })
+
+      if (!response.ok) {
+        let message = 'Request failed'
+        try {
+          const data = (await response.json()) as { detail?: unknown }
+          const parsed = data.detail != null ? formatFastApiDetail(data.detail) : null
+          if (parsed) {
+            message = parsed
+          }
+        } catch {
+          // Ignore JSON parse errors for non-JSON responses.
+        }
+        throw new Error(message)
+      }
+
+      useApiRequestQueueStore.getState().markSuccess(requestId)
+      return (await response.json()) as T
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Network error'
+      lastError = error instanceof Error ? error : new Error(message)
+      if (attemptIndex < RETRY_DELAYS_MS.length) {
+        const retryInSeconds = Math.round(RETRY_DELAYS_MS[attemptIndex] / 1000)
+        useApiRequestQueueStore
+          .getState()
+          .markRetry(requestId, retryInSeconds, attemptIndex + 2, `${message}. Повтор через ${retryInSeconds}с`)
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attemptIndex]))
+        continue
+      }
+      useApiRequestQueueStore.getState().markError(requestId, message)
+      throw lastError
+    }
+  }
+  useApiRequestQueueStore.getState().markError(requestId, lastError?.message ?? 'Request failed')
+  throw lastError ?? new Error('Request failed')
 }
 
 export async function loginWithCredentials(credentials: AuthCredentials): Promise<LoginResponse> {

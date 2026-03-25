@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useId, useMemo, useState } from 'react'
 import { Shield } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
@@ -8,6 +8,7 @@ import { ProfileLogoutButton } from '../components/profile/ProfileLogoutButton'
 import { ProfileMenu } from '../components/profile/ProfileMenu'
 import { ProfilePageHeader } from '../components/profile/ProfilePageHeader'
 import { ProfileStats } from '../components/profile/ProfileStats'
+import { ProfileMenuToggle } from '../components/profile/ProfileMenuToggle'
 import { UserInfo } from '../components/profile/UserInfo'
 import { StatusBar } from '../components/StatusBar'
 import { MOCK_PROFILE_MENU } from '../data/profileMock'
@@ -25,6 +26,9 @@ export function ProfilePage(): JSX.Element {
   const setUser = useAuthStore((s) => s.setUser)
   const notificationsEnabled = useSettingsStore((s) => s.notificationsEnabled)
   const setNotificationsEnabled = useSettingsStore((s) => s.setNotificationsEnabled)
+  const demoDataEnabled = useSettingsStore((s) => s.demoDataEnabled)
+  const setDemoDataEnabled = useSettingsStore((s) => s.setDemoDataEnabled)
+  const demoToggleLabelId = useId()
   const [showSecurityModal, setShowSecurityModal] = useState(false)
   const [showEditProfileModal, setShowEditProfileModal] = useState(false)
   const [displayNameInput, setDisplayNameInput] = useState('')
@@ -158,6 +162,23 @@ export function ProfilePage(): JSX.Element {
           onNotificationsChange={setNotificationsEnabled}
           onItemClick={onMenuItem}
         />
+        <section className="rounded-[14px] bg-[#141829] p-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p id={demoToggleLabelId} className="font-[family-name:var(--font-inter)] text-sm font-medium text-white">
+                Демо-данные матчей
+              </p>
+              <p className="mt-1 text-xs text-[#8b95b0]">
+                Если live API пустой, показывать тестовые матчи для демонстрации
+              </p>
+            </div>
+            <ProfileMenuToggle
+              pressed={demoDataEnabled}
+              onChange={setDemoDataEnabled}
+              labelledBy={demoToggleLabelId}
+            />
+          </div>
+        </section>
         <ProfileLogoutButton onClick={onLogout} />
       </main>
       {showSecurityModal ? (

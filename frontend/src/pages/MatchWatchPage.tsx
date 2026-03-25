@@ -3,9 +3,18 @@ import { ArrowLeft, PlayCircle } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { StatusBar } from '../components/StatusBar'
 import { createPrediction, getActiveSession, getLiveMatches, getMyPrediction } from '../services/gameApi'
+import { useGameWalletStore } from '../stores/gameWalletStore'
 import type { GameSession, LiveMatch, Prediction } from '../types/game'
 
 const LIVE_POLL_MS = 10_000
+const BET_ODDS_OPTIONS = [0.5, 1, 1.8, 2.1] as const
+const DEFAULT_STAKE_INPUT = '500'
+const DEFAULT_ODDS = 1 as const
+
+interface MatchCouponDraft {
+  stakeInput: string
+  selectedOdds: (typeof BET_ODDS_OPTIONS)[number]
+}
 
 function timerLabel(match: LiveMatch | null): string {
   if (!match) return '—'
@@ -33,6 +42,10 @@ export function MatchWatchPage(): JSX.Element {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [predictLoading, setPredictLoading] = useState(false)
+  const [stakeInput, setStakeInput] = useState(DEFAULT_STAKE_INPUT)
+  const [selectedOdds, setSelectedOdds] = useState<(typeof BET_ODDS_OPTIONS)[number]>(DEFAULT_ODDS)
+  const [couponDraftByMatchId, setCouponDraftByMatchId] = useState<Record<number, MatchCouponDraft>>({})
+  const setPredictionStake = useGameWalletStore((s) => s.setPredictionStake)
   const numericMatchId = Number(matchId)
 
   const load = useCallback(async () => {
@@ -68,9 +81,57 @@ export function MatchWatchPage(): JSX.Element {
     return () => window.clearInterval(id)
   }, [load])
 
+  useEffect(() => {
+    if (!Number.isFinite(numericMatchId)) return
+    const draft = couponDraftByMatchId[numericMatchId]
+    if (draft) {
+      setStakeInput(draft.stakeInput)
+      setSelectedOdds(draft.selectedOdds)
+    } else {
+      setStakeInput(DEFAULT_STAKE_INPUT)
+      setSelectedOdds(DEFAULT_ODDS)
+    }
+    setError(null)
+  }, [couponDraftByMatchId, numericMatchId])
+
+  const onStakeInputChange = useCallback(
+    (nextValue: string) => {
+      setStakeInput(nextValue)
+      if (!Number.isFinite(numericMatchId)) return
+      setCouponDraftByMatchId((prev) => ({
+        ...prev,
+        [numericMatchId]: {
+          stakeInput: nextValue,
+          selectedOdds,
+        },
+      }))
+    },
+    [numericMatchId, selectedOdds],
+  )
+
+  const onSelectOdds = useCallback(
+    (odd: (typeof BET_ODDS_OPTIONS)[number]) => {
+      setSelectedOdds(odd)
+      if (!Number.isFinite(numericMatchId)) return
+      setCouponDraftByMatchId((prev) => ({
+        ...prev,
+        [numericMatchId]: {
+          stakeInput,
+          selectedOdds: odd,
+        },
+      }))
+    },
+    [numericMatchId, stakeInput],
+  )
+
   const onPredict = useCallback(async () => {
     if (!session) {
       setError('Сейчас нет активной сессии для прогноза')
+      return
+    }
+    const stakeValue = Number(stakeInput.replace(/\s+/g, '').replace(',', '.'))
+    if (!Number.isFinite(stakeValue) || stakeValue <= 0) {
+      setError('Укажи сумму прогноза больше 0 ₽')
       return
     }
     if (session.status !== 'predicting') {
@@ -81,6 +142,7 @@ export function MatchWatchPage(): JSX.Element {
       setError('Вы уже отправили прогноз в этой сессии')
       return
     }
+    setPredictionStake(session.id, Math.round(stakeValue))
     setPredictLoading(true)
     try {
       const created = await createPrediction(session.id)
@@ -91,12 +153,18 @@ export function MatchWatchPage(): JSX.Element {
     } finally {
       setPredictLoading(false)
     }
-  }, [prediction, session])
+  }, [prediction, session, setPredictionStake, stakeInput])
 
   const scoreLabel = useMemo(() => {
     if (!match) return '— : —'
     return `${match.home_score ?? '—'} : ${match.away_score ?? '—'}`
   }, [match])
+
+  const stakeValue = useMemo(() => Number(stakeInput.replace(/\s+/g, '').replace(',', '.')), [stakeInput])
+  const potentialWinLabel = useMemo(() => {
+    if (!Number.isFinite(stakeValue) || stakeValue <= 0) return '—'
+    return new Intl.NumberFormat('ru-RU').format(Math.round(stakeValue * selectedOdds))
+  }, [selectedOdds, stakeValue])
 
   return (
     <>
@@ -144,6 +212,35 @@ export function MatchWatchPage(): JSX.Element {
               Прогноз отправлен в {new Date(prediction.predicted_at_ms).toLocaleTimeString()}
             </p>
           ) : null}
+          <div className="mt-3 rounded-xl bg-[#1c2036] p-3">
+            <p className="text-[10px] text-[#8b95b0]">Сумма прогноза</p>
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                value={stakeInput}
+                onChange={(e) => onStakeInputChange(e.target.value)}
+                inputMode="numeric"
+                className="h-10 w-full rounded-lg bg-[#0f1322] px-3 text-sm font-semibold text-white outline-none ring-1 ring-inset ring-[#2a2f48] focus:ring-[#8b5cf6]"
+              />
+              <span className="text-xs font-medium text-[#8b95b0]">₽</span>
+            </div>
+            <div className="mt-2 flex items-center gap-1 rounded-lg bg-[#0f1322] p-1">
+              {BET_ODDS_OPTIONS.map((odd) => (
+                <button
+                  key={odd}
+                  type="button"
+                  onClick={() => onSelectOdds(odd)}
+                  className={`rounded-md px-2 py-1 text-xs font-semibold ${
+                    selectedOdds === odd ? 'bg-[#8b5cf6] text-white' : 'text-[#8b95b0]'
+                  }`}
+                >
+                  x{odd}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-[#8b95b0]">
+              Потенциальный выигрыш: <span className="font-semibold text-[#22c55e]">{potentialWinLabel} ₽</span>
+            </p>
+          </div>
           {loading ? <p className="mt-2 text-xs text-[#8b95b0]">Загрузка...</p> : null}
           {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}
           <button

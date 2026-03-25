@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { Circle, Crosshair } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
 import { CategoryStrip } from '../components/CategoryStrip'
 import { HeroBanner } from '../components/HeroBanner'
@@ -8,19 +9,24 @@ import { MatchCard } from '../components/MatchCard'
 import { SectionHeader } from '../components/SectionHeader'
 import { SportTabs } from '../components/SportTabs'
 import { StatusBar } from '../components/StatusBar'
+import { buildDemoLeaderboard } from '../data/demoLeaderboard'
+import { getDemoEsportMatches, getDemoFootballMatches } from '../data/demoLiveMatches'
 import {
   createPrediction,
   getActiveSession,
   getCoachAdvice,
   getDailyLeaderboard,
+  getEsportsMatches,
   getLiveMatches,
-  getMatchmakingPreview,
   getMyPrediction,
+  getPopularMatches,
   getSessionLeaderboard,
 } from '../services/gameApi'
 import { PATHS } from '../routes/paths'
 import { useGameWalletStore } from '../stores/gameWalletStore'
+import { useSettingsStore } from '../stores/settingsStore'
 import { useToastStore } from '../stores/toastStore'
+import { useAuth } from '../hooks/useAuth'
 import type { BetSelection } from '../stores/gameWalletStore'
 import type { CategoryItem, LiveMatchData, MatchCardData, SportTab } from '../types/home'
 import type {
@@ -28,7 +34,6 @@ import type {
   GameSession,
   LeaderboardEntry,
   LiveMatch,
-  MatchmakingPreview,
   Prediction,
 } from '../types/game'
 
@@ -36,46 +41,16 @@ const SPORT_TABS: SportTab[] = [
   { id: 'sport', label: 'Спорт', icon: 'trophy' },
   { id: 'esport', label: 'Киберспорт', icon: 'gamepad-2' },
 ]
+const DISPLAY_TIME_ZONE = 'Europe/Moscow'
+const DISPLAY_TIME_ZONE_LABEL = 'МСК'
 
 const CATEGORIES: CategoryItem[] = [
   { id: 'fb', label: 'Футбол', icon: 'circle', iconColor: '#3b82f6' },
   { id: 'cs2', label: 'CS2', icon: 'crosshair', iconColor: '#ef4444' },
-  { id: 'dota', label: 'Dota 2', icon: 'sword', iconColor: '#ef4444' },
-  { id: 'val', label: 'Valorant', icon: 'shield', iconColor: '#f97316' },
-]
-
-const POPULAR_MATCHES_FALLBACK: MatchCardData[] = [
-  {
-    id: 'm1',
-    league: 'Лига чемпионов',
-    leagueIcon: 'circle',
-    leagueIconColor: '#3b82f6',
-    teamLeft: { name: 'PSG' },
-    teamRight: { name: 'Bayern' },
-    vsMeta: 'Завтра, 21:00',
-    odds: [
-      { label: '1', value: '2.10' },
-      { label: 'X', value: '3.40' },
-      { label: '2', value: '3.05' },
-    ],
-  },
-  {
-    id: 'm2',
-    league: 'ESL Pro League',
-    leagueIcon: 'crosshair',
-    leagueIconColor: '#ef4444',
-    teamLeft: { name: 'NaVi' },
-    teamRight: { name: 'FaZe' },
-    vsMeta: 'Сегодня, 18:30',
-    odds: [
-      { label: '1', value: '1.85' },
-      { label: 'X', value: '3.80', variant: 'accent' },
-      { label: '2', value: '2.20' },
-    ],
-  },
 ]
 
 const LIVE_POPULAR_POLL_MS = 10_000
+const ESPORTS_POLL_MS = 20_000
 const BET_ODDS_OPTIONS = [0.5, 1, 1.8, 2.1] as const
 const DEPOSIT_PRESETS = [500, 1000, 5000] as const
 
@@ -86,6 +61,96 @@ interface PendingBetDraft {
 
 const SUPPORTED_SESSION_SPORTS = ['football', 'cs2'] as const
 const SUPPORTED_EVENT_TYPE = 'goal'
+const DASH_SEPARATOR = ' — '
+
+function normalizeSessionSport(value: string | null | undefined): string {
+  if (!value) return ''
+  const normalized = value.toLowerCase().trim()
+  if (normalized === 'csgo') return 'cs2'
+  return normalized
+}
+
+function normalizeEventType(value: string | null | undefined): string {
+  if (!value) return ''
+  const normalized = value.toLowerCase().trim()
+  // Backward compatibility for legacy auto-session rows.
+  if (normalized === 'round' || normalized === 'kill') return 'goal'
+  return normalized
+}
+
+interface SessionMatchMeta {
+  homeTeam: string | null
+  awayTeam: string | null
+  league: string | null
+  startTimeLabel: string | null
+}
+
+function parseSessionMatchMeta(title: string | null | undefined): SessionMatchMeta {
+  if (!title) {
+    return {
+      homeTeam: null,
+      awayTeam: null,
+      league: null,
+      startTimeLabel: null,
+    }
+  }
+
+  const compactTitle = title.trim()
+  const leagueMatch = compactTitle.match(/\(([^)]+)\)/)
+  const league = leagueMatch?.[1]?.trim() ?? null
+  const titleWithoutLeague = compactTitle.replace(/\s*\([^)]+\)\s*/, '').trim()
+  const teamParts = titleWithoutLeague.split(DASH_SEPARATOR).map((part) => part.trim())
+  const homeTeam = teamParts[0] || null
+  const awayTeam = teamParts[1] || null
+
+  const explicitTime = compactTitle.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/)
+  const startTimeLabel = explicitTime ? `${explicitTime[0]} ${DISPLAY_TIME_ZONE_LABEL}` : null
+
+  return {
+    homeTeam,
+    awayTeam,
+    league,
+    startTimeLabel,
+  }
+}
+
+function normalizeTeamKey(value: string | null | undefined): string {
+  if (!value) return ''
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function formatLiveStatusLabel(statusShort: string | null, elapsedMinutes: number | null): string {
+  const status = (statusShort ?? '').toUpperCase()
+  if ((status === '1H' || status === '2H' || status === 'ET') && elapsedMinutes != null) {
+    return `Идёт матч · ${elapsedMinutes}'`
+  }
+  if (status === 'HT') return 'Перерыв'
+  if (status === 'FT') return 'Матч завершён'
+  if (status === 'PEN') return 'Пенальти'
+  if (status === 'NS') return 'Скоро начнётся'
+  if (status === 'LIVE') return 'Идёт матч'
+  return 'Статус уточняется'
+}
+
+function teamsMatch(
+  sessionHome: string | null | undefined,
+  sessionAway: string | null | undefined,
+  matchHome: string | null | undefined,
+  matchAway: string | null | undefined,
+): boolean {
+  const sHome = normalizeTeamKey(sessionHome)
+  const sAway = normalizeTeamKey(sessionAway)
+  const mHome = normalizeTeamKey(matchHome)
+  const mAway = normalizeTeamKey(matchAway)
+  if (!sHome || !sAway || !mHome || !mAway) return false
+  if (sHome === mHome && sAway === mAway) return true
+  if (sHome === mAway && sAway === mHome) return true
+  return false
+}
 
 function formatUpdateTime(value: Date | null): string {
   if (!value) return '—'
@@ -96,11 +161,41 @@ function formatUpdateTime(value: Date | null): string {
   }).format(value)
 }
 
+function getDemoCountdownLabel(match: LiveMatch): string | null {
+  if (!match.league.includes('(Demo)')) return null
+  if (!match.started_at) return 'Демо-матч'
+  const startedAtMs = new Date(match.started_at).getTime()
+  if (!Number.isFinite(startedAtMs)) return 'Демо-матч'
+  if ((match.status_short ?? '').toUpperCase() === 'FT') return 'Демо-матч · завершен'
+  const leftMs = Math.max(0, 2 * 60_000 - (Date.now() - startedAtMs))
+  const mm = Math.floor(leftMs / 60_000)
+  const ss = Math.floor((leftMs % 60_000) / 1000)
+  return `Демо-матч · завершится через ${String(mm)}:${String(ss).padStart(2, '0')}`
+}
+
+function getDemoCountdownShort(match: LiveMatch): string | null {
+  if (!match.league.includes('(Demo)')) return null
+  if (!match.started_at) return null
+  const startedAtMs = new Date(match.started_at).getTime()
+  if (!Number.isFinite(startedAtMs)) return null
+  if ((match.status_short ?? '').toUpperCase() === 'FT') return 'FT'
+  const leftMs = Math.max(0, 2 * 60_000 - (Date.now() - startedAtMs))
+  const mm = Math.floor(leftMs / 60_000)
+  const ss = Math.floor((leftMs % 60_000) / 1000)
+  return `${String(mm)}:${String(ss).padStart(2, '0')}`
+}
+
 function formatPopularMeta(match: LiveMatch): string {
+  const demoLabel = getDemoCountdownLabel(match)
+  if (demoLabel) return demoLabel
   const startedAt = match.started_at ? new Date(match.started_at) : null
   const startLabel =
     startedAt && !Number.isNaN(startedAt.getTime())
-      ? `Старт ${new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(startedAt)}`
+      ? `Старт ${new Intl.DateTimeFormat('ru-RU', {
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: DISPLAY_TIME_ZONE,
+        }).format(startedAt)} ${DISPLAY_TIME_ZONE_LABEL}`
       : null
   const status = match.status_short ?? 'LIVE'
   const statusLabel =
@@ -116,7 +211,7 @@ function formatPopularMeta(match: LiveMatch): string {
 function formatSessionStatusLabel(status: GameSession['status']): string {
   if (status === 'waiting') return 'Ожидание'
   if (status === 'predicting') return 'Окно открыто'
-  if (status === 'locked') return 'Окно закрыто'
+  if (status === 'locked') return 'Приём прогнозов завершён'
   return 'Сессия завершена'
 }
 
@@ -129,13 +224,6 @@ function coachProfileLabel(value: CoachAdvice['timing_profile']): string {
   if (value === 'late') return 'Поздний клик'
   if (value === 'early') return 'Ранний клик'
   return 'Стабильный тайминг'
-}
-
-function matchmakingBucketLabel(bucket: string): string {
-  if (bucket === 'gold') return 'Gold'
-  if (bucket === 'silver') return 'Silver'
-  if (bucket === 'bronze') return 'Bronze'
-  return bucket
 }
 
 function toPopularMatchCard(match: LiveMatch): MatchCardData {
@@ -158,6 +246,8 @@ function toPopularMatchCard(match: LiveMatch): MatchCardData {
 }
 
 function toLiveMatchRow(match: LiveMatch): LiveMatchData {
+  const demoLabel = getDemoCountdownLabel(match)
+  const demoShort = getDemoCountdownShort(match)
   const status = match.status_short ?? 'LIVE'
   const timer =
     match.elapsed_minutes != null && ['1H', '2H', 'ET'].includes(status)
@@ -165,8 +255,8 @@ function toLiveMatchRow(match: LiveMatch): LiveMatchData {
       : status
   return {
     id: `live-row-${match.provider_match_id}`,
-    liveLabel: status === 'HT' ? 'HT' : status === 'FT' ? 'FT' : status === 'PEN' ? 'PEN' : 'LIVE',
-    timer,
+    liveLabel: demoLabel ? 'DEMO' : status === 'HT' ? 'HT' : status === 'FT' ? 'FT' : status === 'PEN' ? 'PEN' : 'LIVE',
+    timer: demoShort ?? timer,
     teamLeft: { name: match.home_team },
     teamRight: { name: match.away_team },
     score: `${match.home_score ?? '—'} - ${match.away_score ?? '—'}`,
@@ -180,12 +270,14 @@ function toLiveMatchRow(match: LiveMatch): LiveMatchData {
 export function HomePage(): JSX.Element {
   const navigate = useNavigate()
   const location = useLocation()
+  const { user } = useAuth()
   const bonusRef = useRef<HTMLElement | null>(null)
   const [tab, setTab] = useState('sport')
   const [session, setSession] = useState<GameSession | null>(null)
-  const [popularMatches, setPopularMatches] = useState<MatchCardData[]>(POPULAR_MATCHES_FALLBACK)
+  const [popularMatches, setPopularMatches] = useState<MatchCardData[]>([])
   const [showAllPopular, setShowAllPopular] = useState(false)
   const [liveMatches, setLiveMatches] = useState<LiveMatch[]>([])
+  const [esportsMatches, setEsportsMatches] = useState<LiveMatch[]>([])
   const [lastLiveSuccessAt, setLastLiveSuccessAt] = useState<Date | null>(null)
   const [showAllLive, setShowAllLive] = useState(false)
   const [fundingModalMode, setFundingModalMode] = useState<'none' | 'deposit' | 'welcome'>('none')
@@ -197,13 +289,14 @@ export function HomePage(): JSX.Element {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
   const [dailyLeaderboard, setDailyLeaderboard] = useState<LeaderboardEntry[]>([])
   const [coachAdvice, setCoachAdvice] = useState<CoachAdvice | null>(null)
-  const [matchmakingPreview, setMatchmakingPreview] = useState<MatchmakingPreview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [predictLoading, setPredictLoading] = useState(false)
+  const demoDataEnabled = useSettingsStore((s) => s.demoDataEnabled)
   const balance = useGameWalletStore((s) => s.balance)
   const bets = useGameWalletStore((s) => s.bets)
   const placeBet = useGameWalletStore((s) => s.placeBet)
+  const setPredictionStake = useGameWalletStore((s) => s.setPredictionStake)
   const settleFromMatches = useGameWalletStore((s) => s.settleFromMatches)
   const addDemoFunds = useGameWalletStore((s) => s.addDemoFunds)
   const claimWelcomeBonus = useGameWalletStore((s) => s.claimWelcomeBonus)
@@ -217,11 +310,11 @@ export function HomePage(): JSX.Element {
       setSession(active)
 
       if (!active) {
-        const [daily, matchmaking] = await Promise.all([getDailyLeaderboard(), getMatchmakingPreview()])
+        const daily = await getDailyLeaderboard()
         setPrediction(null)
         setLeaderboard([])
-        setMatchmakingPreview(matchmaking)
-        setDailyLeaderboard(daily.items.slice(0, 5))
+        const fallbackDaily = demoDataEnabled && daily.items.length === 0 ? buildDemoLeaderboard(user) : daily.items
+        setDailyLeaderboard(fallbackDaily.slice(0, 5))
         try {
           const coach = await getCoachAdvice()
           setCoachAdvice(coach)
@@ -232,16 +325,15 @@ export function HomePage(): JSX.Element {
         return
       }
 
-      const [myPrediction, lb, daily, matchmaking] = await Promise.all([
+      const [myPrediction, lb, daily] = await Promise.all([
         getMyPrediction(active.id),
         getSessionLeaderboard(active.id),
         getDailyLeaderboard(),
-        getMatchmakingPreview(active.id),
       ])
       setPrediction(myPrediction)
       setLeaderboard(lb.items.slice(0, 5))
-      setDailyLeaderboard(daily.items.slice(0, 5))
-      setMatchmakingPreview(matchmaking)
+      const fallbackDaily = demoDataEnabled && daily.items.length === 0 ? buildDemoLeaderboard(user) : daily.items
+      setDailyLeaderboard(fallbackDaily.slice(0, 5))
       if (myPrediction?.score != null) {
         try {
           const coach = await getCoachAdvice(active.id)
@@ -258,7 +350,7 @@ export function HomePage(): JSX.Element {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [demoDataEnabled, user])
 
   useEffect(() => {
     void loadGameState()
@@ -275,23 +367,36 @@ export function HomePage(): JSX.Element {
 
   const loadLiveFeed = useCallback(async () => {
     try {
-      const items = await getLiveMatches()
-      if (items.length === 0) {
-        setPopularMatches(POPULAR_MATCHES_FALLBACK)
-        setLiveMatches([])
+      const [liveItems, popularItems] = await Promise.all([
+        getLiveMatches(),
+        getPopularMatches().catch(() => []),
+      ])
+      if (liveItems.length === 0 && popularItems.length === 0) {
+        if (demoDataEnabled) {
+          const demoFootball = getDemoFootballMatches()
+          setLiveMatches(demoFootball)
+          setPopularMatches(demoFootball.slice(0, 6).map(toPopularMatchCard))
+          settleFromMatches(demoFootball)
+          setLastLiveSuccessAt(new Date())
+        } else {
+          setPopularMatches([])
+          setLiveMatches([])
+        }
         return
       }
-      const mapped = items.slice(0, 6).map(toPopularMatchCard)
+
+      const popularSource = popularItems.length > 0 ? popularItems : liveItems
+      const mapped = popularSource.slice(0, 6).map(toPopularMatchCard)
       setPopularMatches(mapped)
-      setLiveMatches(items)
-      if (items.length > 0) {
+      setLiveMatches(liveItems)
+      if (liveItems.length > 0) {
         setLastLiveSuccessAt(new Date())
       }
-      settleFromMatches(items)
+      settleFromMatches(liveItems)
     } catch {
       // Keep the previous list/fallback to avoid breaking Home screen.
     }
-  }, [settleFromMatches])
+  }, [demoDataEnabled, settleFromMatches])
 
   useEffect(() => {
     void loadLiveFeed()
@@ -300,6 +405,36 @@ export function HomePage(): JSX.Element {
     }, LIVE_POPULAR_POLL_MS)
     return () => window.clearInterval(id)
   }, [loadLiveFeed])
+
+  const loadEsportsFeed = useCallback(async () => {
+    try {
+      const items = await getEsportsMatches()
+      if (items.length > 0) {
+        setEsportsMatches(items)
+        setLastLiveSuccessAt(new Date())
+      } else if (demoDataEnabled) {
+        setEsportsMatches(getDemoEsportMatches())
+        setLastLiveSuccessAt(new Date())
+      } else {
+        setEsportsMatches([])
+      }
+    } catch {
+      if (demoDataEnabled) {
+        setEsportsMatches(getDemoEsportMatches())
+        setLastLiveSuccessAt(new Date())
+      }
+    }
+  }, [demoDataEnabled])
+
+  useEffect(() => {
+    const shouldLoadEsports = tab === 'esport' || normalizeSessionSport(session?.sport) === 'cs2'
+    if (!shouldLoadEsports) return
+    void loadEsportsFeed()
+    const id = window.setInterval(() => {
+      void loadEsportsFeed()
+    }, ESPORTS_POLL_MS)
+    return () => window.clearInterval(id)
+  }, [loadEsportsFeed, session?.sport, tab])
 
   useEffect(() => {
     if (location.hash !== '#welcome-bonus') return
@@ -310,13 +445,23 @@ export function HomePage(): JSX.Element {
     }, 80)
   }, [location.hash])
 
-  const visibleLiveMatches = useMemo(
-    () => (showAllLive ? liveMatches : liveMatches.slice(0, 2)),
-    [liveMatches, showAllLive],
+  const selectedLiveMatches = useMemo(
+    () => (tab === 'esport' ? esportsMatches : liveMatches),
+    [esportsMatches, liveMatches, tab],
   )
+  const selectedPopularMatches = useMemo(
+    () => (tab === 'esport' ? esportsMatches.map(toPopularMatchCard) : popularMatches),
+    [esportsMatches, popularMatches, tab],
+  )
+  const visibleLiveMatches = useMemo(
+    () => (showAllLive ? selectedLiveMatches : selectedLiveMatches.slice(0, 2)),
+    [selectedLiveMatches, showAllLive],
+  )
+  const hasAnyLiveMatches = liveMatches.length > 0 || esportsMatches.length > 0
+  const showActiveSessionCard = false
   const visiblePopularMatches = useMemo(
-    () => (showAllPopular ? popularMatches : popularMatches.slice(0, 2)),
-    [popularMatches, showAllPopular],
+    () => (showAllPopular ? selectedPopularMatches : selectedPopularMatches.slice(0, 2)),
+    [selectedPopularMatches, showAllPopular],
   )
   const balanceLabel = useMemo(() => new Intl.NumberFormat('ru-RU').format(balance), [balance])
   const activeWalletBets = useMemo(() => bets.filter((item) => item.status === 'open'), [bets])
@@ -333,6 +478,8 @@ export function HomePage(): JSX.Element {
 
   const onOpenBetCoupon = useCallback((match: LiveMatch, selection: BetSelection) => {
     setPendingBet({ match, selection })
+    setStakeInput('500')
+    setSelectedOdds(1)
     setBetError(null)
   }, [])
 
@@ -372,6 +519,11 @@ export function HomePage(): JSX.Element {
 
   const onPredictNow = useCallback(async () => {
     if (!session) return
+    if (!Number.isFinite(stakeValue) || stakeValue <= 0) {
+      setError('Укажи сумму прогноза больше 0 ₽')
+      return
+    }
+    setPredictionStake(session.id, Math.round(stakeValue))
     setPredictLoading(true)
     try {
       const created = await createPrediction(session.id)
@@ -382,20 +534,32 @@ export function HomePage(): JSX.Element {
     } finally {
       setPredictLoading(false)
     }
-  }, [session])
+  }, [session, setPredictionStake, stakeValue])
 
   const statusText = useMemo(() => {
     if (!session) return 'Сейчас нет активной сессии'
     if (session.status === 'waiting') return 'Сессия создана, ждём открытия окна прогнозов'
+    const createdAtMs = new Date(session.created_at).getTime()
+    const leftMs =
+      Number.isFinite(createdAtMs) && session.status === 'predicting'
+        ? Math.max(0, createdAtMs + session.prediction_window_ms - nowMs)
+        : null
+    if (session.status === 'predicting' && leftMs === 0) {
+      return 'Приём прогнозов завершён, ожидаем результат события'
+    }
     if (session.status === 'predicting') return 'Окно прогнозов открыто'
-    if (session.status === 'locked') return 'Окно закрыто, ждём фиксацию события'
+    if (session.status === 'locked') return 'Приём прогнозов завершён, ожидаем результат события'
     return 'Сессия завершена, результаты готовы'
-  }, [session])
+  }, [nowMs, session])
 
   const isSupportedSession = useMemo(() => {
     if (!session) return false
-    return SUPPORTED_SESSION_SPORTS.includes(session.sport as (typeof SUPPORTED_SESSION_SPORTS)[number]) &&
-      session.event_type === SUPPORTED_EVENT_TYPE
+    const normalizedSport = normalizeSessionSport(session.sport)
+    const normalizedEventType = normalizeEventType(session.event_type)
+    return (
+      SUPPORTED_SESSION_SPORTS.includes(normalizedSport as (typeof SUPPORTED_SESSION_SPORTS)[number]) &&
+      normalizedEventType === SUPPORTED_EVENT_TYPE
+    )
   }, [session])
 
   const windowTimerLabel = useMemo(() => {
@@ -408,9 +572,19 @@ export function HomePage(): JSX.Element {
     if (!Number.isFinite(createdAtMs)) return '—'
     const endsAtMs = createdAtMs + session.prediction_window_ms
     const leftMs = Math.max(0, endsAtMs - nowMs)
+    if (leftMs === 0) return 'Время вышло'
     const mm = Math.floor(leftMs / 60_000)
     const ss = Math.floor((leftMs % 60_000) / 1000)
     return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+  }, [nowMs, session])
+
+  const windowStatusLabel = useMemo(() => {
+    if (!session) return '—'
+    if (session.status !== 'predicting') return formatSessionStatusLabel(session.status)
+    const createdAtMs = new Date(session.created_at).getTime()
+    if (!Number.isFinite(createdAtMs)) return formatSessionStatusLabel(session.status)
+    const leftMs = Math.max(0, createdAtMs + session.prediction_window_ms - nowMs)
+    return leftMs === 0 ? 'Приём прогнозов завершён' : 'Окно открыто'
   }, [nowMs, session])
 
   const resultCard = useMemo(() => {
@@ -422,6 +596,32 @@ export function HomePage(): JSX.Element {
       grade,
       commentary: prediction.ai_commentary,
     }
+  }, [prediction])
+
+  const sessionMatchMeta = useMemo(() => parseSessionMatchMeta(session?.title), [session?.title])
+  const normalizedSessionSport = useMemo(() => normalizeSessionSport(session?.sport), [session?.sport])
+  const sessionLiveMatch = useMemo(() => {
+    if (!sessionMatchMeta.homeTeam || !sessionMatchMeta.awayTeam) return null
+    const source = [...liveMatches, ...esportsMatches]
+    return (
+      source.find(
+        (match) =>
+          teamsMatch(sessionMatchMeta.homeTeam, sessionMatchMeta.awayTeam, match.home_team, match.away_team),
+      ) ?? null
+    )
+  }, [esportsMatches, liveMatches, sessionMatchMeta.awayTeam, sessionMatchMeta.homeTeam])
+  const sessionScoreLabel = useMemo(() => {
+    if (!sessionLiveMatch) return '— : —'
+    return `${sessionLiveMatch.home_score ?? '—'} : ${sessionLiveMatch.away_score ?? '—'}`
+  }, [sessionLiveMatch])
+  const sessionLiveStatusLabel = useMemo(() => {
+    if (!sessionLiveMatch) return 'Нет live-данных'
+    return formatLiveStatusLabel(sessionLiveMatch.status_short, sessionLiveMatch.elapsed_minutes)
+  }, [sessionLiveMatch])
+  const predictionCardLabel = useMemo(() => {
+    if (!prediction) return 'Не отправлен'
+    if (prediction.score != null) return `${prediction.score} очков`
+    return `Отправлен в ${new Date(prediction.predicted_at_ms).toLocaleTimeString()}`
   }, [prediction])
 
   const onDepositPreset = useCallback(
@@ -474,25 +674,64 @@ export function HomePage(): JSX.Element {
         <section id="welcome-bonus" ref={bonusRef}>
           <HeroBanner onCtaClick={onWelcomeCtaClick} isClaimed={welcomeBonusClaimed} />
         </section>
-        <section className="rounded-2xl bg-[#141829] p-4 ring-1 ring-inset ring-[#1c2036]">
-          <h2 className="font-[family-name:var(--font-sora)] text-lg font-bold text-white">
-            {session ? session.title : 'Активная сессия'}
-          </h2>
+        {showActiveSessionCard && hasAnyLiveMatches ? (
+          <section className="rounded-2xl bg-[#141829] p-4 ring-1 ring-inset ring-[#1c2036]">
+          <h2 className="font-[family-name:var(--font-sora)] text-lg font-bold text-white">Активная сессия</h2>
           <p className="mt-1 font-[family-name:var(--font-inter)] text-xs text-[#8b95b0]">{statusText}</p>
+          {session ? (
+            <article className="mt-3 flex flex-col overflow-hidden rounded-[14px] bg-[#141829] ring-1 ring-inset ring-[#1c2036]">
+              <div className="flex flex-col gap-2.5 px-3.5 pb-2.5 pt-3.5">
+                <div className="flex items-center gap-1.5">
+                  {normalizedSessionSport === 'cs2' ? (
+                    <Crosshair className="size-2.5 shrink-0 text-[#ef4444]" strokeWidth={2.5} />
+                  ) : (
+                    <Circle className="size-2.5 shrink-0 text-[#3b82f6]" strokeWidth={2.5} />
+                  )}
+                  <span className="font-[family-name:var(--font-inter)] text-[10px] font-medium leading-none text-[#4b5577]">
+                    {sessionMatchMeta.league ?? 'Live матч'}
+                  </span>
+                </div>
+                <div className="flex w-full min-w-0 items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
+                    <div className="size-8 rounded-2xl bg-[#1c2036]" />
+                    <span className="max-w-full text-center font-[family-name:var(--font-inter)] text-[10px] font-semibold leading-tight text-white break-words">
+                      {sessionMatchMeta.homeTeam ?? 'Team A'}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-center gap-0.5">
+                    <span className="font-[family-name:var(--font-sora)] text-xs font-bold text-[#4b5577]">VS</span>
+                    <span className="font-[family-name:var(--font-inter)] text-[10px] font-medium leading-none text-[#8b95b0]">
+                      {sessionMatchMeta.startTimeLabel ?? 'LIVE сейчас'}
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
+                    <div className="size-8 rounded-2xl bg-[#1c2036]" />
+                    <span className="max-w-full text-center font-[family-name:var(--font-inter)] text-[10px] font-semibold leading-tight text-white break-words">
+                      {sessionMatchMeta.awayTeam ?? 'Team B'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </article>
+          ) : null}
           <div className="mt-3 grid grid-cols-3 gap-2">
             <div className="rounded-lg bg-[#1c2036] p-2">
-              <p className="text-[10px] text-[#8b95b0]">Событие</p>
-              <p className="text-sm font-semibold text-white">{session?.event_type ?? '—'}</p>
+              <p className="text-[10px] text-[#8b95b0]">Счёт</p>
+              <p className="text-sm font-semibold text-white">{sessionScoreLabel}</p>
             </div>
             <div className="rounded-lg bg-[#1c2036] p-2">
-              <p className="text-[10px] text-[#8b95b0]">Статус окна</p>
-              <p className="text-sm font-semibold text-white">{session ? formatSessionStatusLabel(session.status) : '—'}</p>
+              <p className="text-[10px] text-[#8b95b0]">Статус матча</p>
+              <p className="text-sm font-semibold text-white">{sessionLiveStatusLabel}</p>
             </div>
             <div className="rounded-lg bg-[#1c2036] p-2">
-              <p className="text-[10px] text-[#8b95b0]">Таймер</p>
-              <p className="text-sm font-semibold text-white">{windowTimerLabel}</p>
+              <p className="text-[10px] text-[#8b95b0]">Твой прогноз</p>
+              <p className="text-sm font-semibold text-white">{predictionCardLabel}</p>
             </div>
           </div>
+          <p className="mt-2 text-xs text-[#8b95b0]">
+            {session ? `Окно прогнозов: ${windowStatusLabel}` : 'Окно прогнозов: —'}
+            {session ? ` · ${windowTimerLabel}` : ''}
+          </p>
           {!isSupportedSession && session ? (
             <p className="mt-2 text-xs text-amber-400">
               Для MVP поддерживаются только goal и виды спорта football/cs2.
@@ -543,29 +782,6 @@ export function HomePage(): JSX.Element {
               </div>
             </div>
           ) : null}
-          {matchmakingPreview ? (
-            <div className="mt-3 rounded-xl bg-[#1c2036] p-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-[#8b95b0]">AI-матчмейкинг турниров</p>
-              <p className="mt-1 text-sm font-semibold text-white">
-                Ваш дивизион: {matchmakingPreview.your_bucket ? matchmakingBucketLabel(matchmakingPreview.your_bucket) : '—'}
-              </p>
-              <div className="mt-2 flex flex-col gap-2">
-                {matchmakingPreview.buckets
-                  .filter((bucket) => bucket.players.length > 0)
-                  .map((bucket) => (
-                    <div key={bucket.bucket} className="rounded-lg bg-[#141829] p-2">
-                      <p className="text-[10px] font-semibold text-[#8b95b0]">{bucket.title}</p>
-                      {bucket.players.slice(0, 3).map((player) => (
-                        <div key={`${bucket.bucket}-${player.user_id}`} className="mt-1 flex items-center justify-between text-xs">
-                          <span className="text-[#8b95b0]">{player.username}</span>
-                          <span className="font-semibold text-white">{Math.round(player.skill_score)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-              </div>
-            </div>
-          ) : null}
           {leaderboard.length > 0 ? (
             <div className="mt-3 flex flex-col gap-1.5">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-[#8b95b0]">Таблица по текущей сессии</p>
@@ -588,12 +804,18 @@ export function HomePage(): JSX.Element {
               ))}
             </div>
           ) : null}
-        </section>
+          </section>
+        ) : null}
         <SportTabs tabs={SPORT_TABS} activeId={tab} onChange={setTab} />
         <CategoryStrip items={CATEGORIES} />
         <section className="flex flex-col gap-3">
           <SectionHeader title="Популярные матчи" />
           <div className="flex flex-col gap-3">
+            {selectedPopularMatches.length === 0 ? (
+              <p className="py-6 text-center text-sm text-[#8b95b0]">
+                В данный момент нет матчей, пожалуйста подождите
+              </p>
+            ) : null}
             {visiblePopularMatches.map((m) => (
               <MatchCard
                 key={m.id}
@@ -602,13 +824,13 @@ export function HomePage(): JSX.Element {
                 onClick={typeof m.matchId === 'number' ? () => onOpenMatchWatch(m.matchId as number) : undefined}
               />
             ))}
-            {popularMatches.length > 2 ? (
+            {selectedPopularMatches.length > 2 ? (
               <button
                 type="button"
                 onClick={() => setShowAllPopular((prev) => !prev)}
                 className="h-10 rounded-xl bg-[#1c2036] font-[family-name:var(--font-inter)] text-sm font-semibold text-[#8b95b0]"
               >
-                {showAllPopular ? 'Свернуть популярные' : `Все популярные (${popularMatches.length})`}
+                {showAllPopular ? 'Свернуть популярные' : `Все популярные (${selectedPopularMatches.length})`}
               </button>
             ) : null}
           </div>
@@ -620,7 +842,7 @@ export function HomePage(): JSX.Element {
               <div className="flex items-center gap-1.5 rounded-md bg-[#ef4444]/20 px-2 py-[3px]">
                 <span className="size-1.5 shrink-0 rounded-full bg-[#ef4444]" aria-hidden />
                 <span className="font-[family-name:var(--font-inter)] text-[10px] font-bold text-[#ef4444]">
-                  {liveMatches.length}
+                  {selectedLiveMatches.length}
                 </span>
               </div>
             }
@@ -715,13 +937,13 @@ export function HomePage(): JSX.Element {
                 </div>
               )
             })}
-            {liveMatches.length > 2 ? (
+            {selectedLiveMatches.length > 2 ? (
               <button
                 type="button"
                 onClick={() => setShowAllLive((prev) => !prev)}
                 className="h-10 rounded-xl bg-[#1c2036] font-[family-name:var(--font-inter)] text-sm font-semibold text-[#8b95b0]"
               >
-                {showAllLive ? 'Свернуть Live' : `Все сейчас Live (${liveMatches.length})`}
+                {showAllLive ? 'Свернуть Live' : `Все сейчас Live (${selectedLiveMatches.length})`}
               </button>
             ) : null}
           </div>

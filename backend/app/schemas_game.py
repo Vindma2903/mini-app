@@ -116,6 +116,22 @@ class MatchmakingPreviewResponse(BaseModel):
     buckets: list[MatchmakingBucketPublic]
 
 
+class RequestQueueItemPublic(BaseModel):
+    id: str
+    method: str
+    path: str
+    status: str
+    started_at: str
+    finished_at: str | None
+    status_code: int | None
+    error: str | None
+
+
+class RequestQueueSnapshotResponse(BaseModel):
+    in_progress: list[RequestQueueItemPublic]
+    recent: list[RequestQueueItemPublic]
+
+
 class LiveMatchPublic(BaseModel):
     provider_match_id: int
     league: str

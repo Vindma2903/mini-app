@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { StatusBar } from '../components/StatusBar'
+import { buildDemoLeaderboard } from '../data/demoLeaderboard'
 import { useAuth } from '../hooks/useAuth'
 import { getActiveSession, getDailyLeaderboard, getGlobalLeaderboard, getSessionLeaderboard } from '../services/gameApi'
+import { useSettingsStore } from '../stores/settingsStore'
 import type { LeaderboardEntry } from '../types/game'
 
 type RankingTab = 'daily' | 'global' | 'session'
@@ -17,6 +19,7 @@ function formatDelta(value: number | null): string {
 export function RankingPage(): JSX.Element {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const demoDataEnabled = useSettingsStore((s) => s.demoDataEnabled)
   const [tab, setTab] = useState<RankingTab>('daily')
   const [daily, setDaily] = useState<LeaderboardEntry[]>([])
   const [global, setGlobal] = useState<LeaderboardEntry[]>([])
@@ -31,21 +34,30 @@ export function RankingPage(): JSX.Element {
         getGlobalLeaderboard(),
         getActiveSession(),
       ])
-      setDaily(dailyRes.items)
-      setGlobal(globalRes.items)
+      const demo = buildDemoLeaderboard(user)
+      setDaily(demoDataEnabled && dailyRes.items.length === 0 ? demo : dailyRes.items)
+      setGlobal(demoDataEnabled && globalRes.items.length === 0 ? demo : globalRes.items)
       if (activeSession) {
         const sessionRes = await getSessionLeaderboard(activeSession.id)
-        setSession(sessionRes.items)
+        setSession(demoDataEnabled && sessionRes.items.length === 0 ? demo : sessionRes.items)
       } else {
-        setSession([])
+        setSession(demoDataEnabled ? demo : [])
       }
       setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось загрузить рейтинг')
+      if (demoDataEnabled) {
+        const demo = buildDemoLeaderboard(user)
+        setDaily(demo)
+        setGlobal(demo)
+        setSession(demo)
+        setError(null)
+      } else {
+        setError(err instanceof Error ? err.message : 'Не удалось загрузить рейтинг')
+      }
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [demoDataEnabled, user])
 
   useEffect(() => {
     void load()

@@ -2,30 +2,20 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BetCard } from '../components/bets/BetCard'
 import { BetsFilterTabs } from '../components/bets/BetsFilterTabs'
 import { BetsPageHeader } from '../components/bets/BetsPageHeader'
-import { BetsSlipSummary } from '../components/bets/BetsSlipSummary'
 import { StatusBar } from '../components/StatusBar'
-import { getActiveSession, getLiveMatches, getMyPrediction } from '../services/gameApi'
+import { cancelMyPrediction, getActiveSession, getLiveMatches, getMyPrediction } from '../services/gameApi'
 import { useGameWalletStore } from '../stores/gameWalletStore'
+import { useToastStore } from '../stores/toastStore'
 import type { GameBet } from '../stores/gameWalletStore'
-import type { BetListTab, BetRecord, BetsTotals } from '../types/bets'
+import type { BetListTab, BetRecord } from '../types/bets'
 import type { GameSession, LiveMatch, Prediction } from '../types/game'
 
-const EMPTY_TOTALS: BetsTotals = {
-  totalStakeFormatted: '0',
-  count: 0,
-  potentialWinFormatted: '0',
-  oddsHint: 'Ставки отсутствуют',
-  currency: 'PTS',
-}
-
-function toBetRecord(session: GameSession, prediction: Prediction): BetRecord {
+function toBetRecord(session: GameSession, prediction: Prediction, stake: number): BetRecord {
   const score = prediction.score ?? 0
   const outcome = prediction.score == null ? 'active' : score > 0 ? 'won' : 'lost'
-  const settlementLabel = outcome === 'won' ? '+' : outcome === 'lost' ? '-' : undefined
-  const settlementAmount = prediction.score == null ? undefined : String(score)
 
   return {
-    id: String(prediction.id),
+    id: `prediction-${prediction.id}`,
     leagueLine: `${session.sport.toUpperCase()} • ${session.event_type}`,
     leagueMark: session.sport.includes('football') ? { type: 'dot', tone: 'blue' } : { type: 'esports' },
     isLive: session.status === 'predicting' || session.status === 'locked',
@@ -33,15 +23,14 @@ function toBetRecord(session: GameSession, prediction: Prediction): BetRecord {
     marketLabel: 'Мой прогноз',
     selection: `Время клика: ${new Date(prediction.predicted_at_ms).toLocaleTimeString()}`,
     coefficient: prediction.delta_ms != null ? `${prediction.delta_ms}мс` : '—',
-    stakeFormatted: '1',
-    stakeValue: 1,
-    currency: 'PTS',
+    stakeFormatted: new Intl.NumberFormat('ru-RU').format(stake),
+    stakeValue: stake,
+    currency: '₽',
     outcome,
     sortTimestamp: new Date(prediction.created_at).getTime(),
     scheduleHint: session.status,
-    settlementLabel,
-    settlementAmount,
-    potentialWinFormatted: prediction.score == null ? 'до 1000' : undefined,
+    canCancel: outcome === 'active' && (session.status === 'predicting' || session.status === 'locked'),
+    cancelButtonLabel: 'Отменить',
   }
 }
 
@@ -71,7 +60,13 @@ function toGameBetRecord(bet: GameBet, liveMatch: LiveMatch | undefined): BetRec
   const isFinished = (liveMatch?.status_short ?? '').toUpperCase() === 'FT'
   const isOpen = bet.status === 'open'
   const settleLabel =
-    bet.resolveReason === 'cashout' ? 'Cash out +' : bet.resolveReason === 'cancelled' ? 'Возврат +' : outcome === 'won' ? '+' : '-'
+    bet.resolveReason === 'cashout'
+      ? 'Досрочный вывод +'
+      : bet.resolveReason === 'cancelled'
+        ? 'Возврат +'
+        : outcome === 'won'
+          ? '+'
+          : '-'
 
   return {
     id: `wallet-${bet.id}`,
@@ -105,14 +100,19 @@ export function BetsPage(): JSX.Element {
   const [tab, setTab] = useState<BetListTab>('all')
   const [session, setSession] = useState<GameSession | null>(null)
   const [prediction, setPrediction] = useState<Prediction | null>(null)
+  const [pendingPredictionCancelId, setPendingPredictionCancelId] = useState<string | null>(null)
+  const [pendingPredictionCancelSessionId, setPendingPredictionCancelSessionId] = useState<number | null>(null)
   const [liveMatches, setLiveMatches] = useState<LiveMatch[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const gameWalletBets = useGameWalletStore((s) => s.bets)
+  const predictionStakesBySession = useGameWalletStore((s) => s.predictionStakesBySession)
+  const clearPredictionStake = useGameWalletStore((s) => s.clearPredictionStake)
   const settleFromMatches = useGameWalletStore((s) => s.settleFromMatches)
   const cashOutBet = useGameWalletStore((s) => s.cashOutBet)
   const cancelBetWithFee = useGameWalletStore((s) => s.cancelBetWithFee)
   const editBetSelection = useGameWalletStore((s) => s.editBetSelection)
+  const pushToast = useToastStore((s) => s.push)
 
   const loadData = useCallback(async () => {
     try {
@@ -147,9 +147,10 @@ export function BetsPage(): JSX.Element {
   const bets = useMemo<BetRecord[]>(() => {
     const liveById = new Map(liveMatches.map((item) => [item.provider_match_id, item]))
     const wallet = gameWalletBets.map((bet) => toGameBetRecord(bet, liveById.get(bet.matchId)))
-    const predictionBet = session && prediction ? [toBetRecord(session, prediction)] : []
+    const predictionStake = session ? predictionStakesBySession[session.id] ?? 100 : 100
+    const predictionBet = session && prediction ? [toBetRecord(session, prediction, predictionStake)] : []
     return [...wallet, ...predictionBet]
-  }, [gameWalletBets, liveMatches, prediction, session])
+  }, [gameWalletBets, liveMatches, prediction, predictionStakesBySession, session])
 
   const visible = useMemo(() => {
     return tab === 'all'
@@ -160,23 +161,6 @@ export function BetsPage(): JSX.Element {
           ? bets.filter((item) => item.outcome === 'won')
           : bets.filter((item) => item.outcome === 'lost')
   }, [bets, tab])
-
-  const totals = useMemo<BetsTotals>(() => {
-    const activeVisible = visible.filter((item) => item.outcome === 'active')
-    if (activeVisible.length === 0) return EMPTY_TOTALS
-    const totalStake = activeVisible.reduce((acc, item) => acc + Number(item.stakeValue ?? 0), 0)
-    const totalPotential = visible.reduce(
-      (acc, item) => acc + Number((item.potentialWinFormatted ?? '0').replace(/\s/g, '')),
-      0,
-    )
-    return {
-      totalStakeFormatted: new Intl.NumberFormat('ru-RU').format(totalStake),
-      count: activeVisible.length,
-      potentialWinFormatted: new Intl.NumberFormat('ru-RU').format(totalPotential),
-      oddsHint: 'Сумма по активным купонам',
-      currency: '₽',
-    }
-  }, [visible])
 
   const stats = useMemo(() => {
     const walletResolved = gameWalletBets.filter((bet) => bet.status !== 'open')
@@ -215,10 +199,6 @@ export function BetsPage(): JSX.Element {
     }
   }, [gameWalletBets])
 
-  const onPlaceBet = useCallback(() => {
-    // Отправка прогноза выполняется на Home экране кнопкой "Сделать прогноз сейчас".
-  }, [])
-
   const onCashOut = useCallback(
     (betId: string) => {
       const localId = betId.replace('wallet-', '')
@@ -234,6 +214,11 @@ export function BetsPage(): JSX.Element {
 
   const onCancelBet = useCallback(
     (betId: string) => {
+      if (betId.startsWith('prediction-')) {
+        setPendingPredictionCancelId(betId)
+        setPendingPredictionCancelSessionId(prediction?.session_id ?? null)
+        return
+      }
       const localId = betId.replace('wallet-', '')
       const result = cancelBetWithFee(localId)
       if (!result.ok) {
@@ -242,8 +227,33 @@ export function BetsPage(): JSX.Element {
         setError(null)
       }
     },
-    [cancelBetWithFee],
+    [cancelBetWithFee, prediction?.session_id],
   )
+
+  const onConfirmCancelPrediction = useCallback(async () => {
+    if (!pendingPredictionCancelId) return
+    if (!pendingPredictionCancelSessionId) {
+      setError('Сессия не найдена')
+      setPendingPredictionCancelId(null)
+      setPendingPredictionCancelSessionId(null)
+      return
+    }
+    try {
+      await cancelMyPrediction(pendingPredictionCancelSessionId)
+      clearPredictionStake(pendingPredictionCancelSessionId)
+      setPrediction(null)
+      setError(null)
+      pushToast({
+        kind: 'info',
+        title: 'Прогноз отменен',
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось отменить прогноз')
+    } finally {
+      setPendingPredictionCancelId(null)
+      setPendingPredictionCancelSessionId(null)
+    }
+  }, [clearPredictionStake, pendingPredictionCancelId, pendingPredictionCancelSessionId, pushToast])
 
   const onEditSelection = useCallback(
     (betId: string, selection: GameBet['selection']) => {
@@ -303,10 +313,38 @@ export function BetsPage(): JSX.Element {
           ))}
         </section>
 
-        {visible.some((item) => item.outcome === 'active') ? (
-          <BetsSlipSummary totals={totals} onPlaceBet={onPlaceBet} />
-        ) : null}
       </main>
+      {pendingPredictionCancelId ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#02040bcc]/80 p-4">
+          <div className="w-full max-w-[393px] rounded-2xl bg-[#141829] p-4 ring-1 ring-inset ring-[#2a2f48]">
+            <h3 className="font-[family-name:var(--font-sora)] text-base font-bold text-white">Точно отменить?</h3>
+            <p className="mt-1 text-xs text-[#8b95b0]">
+              Прогноз будет удален со страницы ставок. Действие нельзя отменить.
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingPredictionCancelId(null)
+                  setPendingPredictionCancelSessionId(null)
+                }}
+                className="h-10 rounded-lg bg-[#0f1322] text-sm font-medium text-[#8b95b0]"
+              >
+                Назад
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void onConfirmCancelPrediction()
+                }}
+                className="h-10 rounded-lg bg-[#ef4444]/20 text-sm font-semibold text-[#ef4444]"
+              >
+                Отменить
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   )
 }
