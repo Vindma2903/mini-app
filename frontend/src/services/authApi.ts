@@ -1,7 +1,7 @@
 import type { AuthCredentials, AuthUser, LoginResponse } from '../types/auth'
 import { useApiRequestQueueStore } from '../stores/apiRequestQueueStore'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'https://megablank.ru/api/v1'
 const RETRY_DELAYS_MS = [5000, 30000, 60000] as const
 
 function formatFastApiDetail(detail: unknown): string | null {
